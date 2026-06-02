@@ -5,138 +5,102 @@ import Sidebar from "../components/sidebar";
 import ChatArea from "../components/chat-area";
 import ChatInput from "../components/chat-input";
 
-// 1. Aligned strictly with your backend structures
 interface ChatSession {
-  id: string; // Valid RFC4122 UUID String
+  id: string; // RFC4122 UUID String
   title: string;
   summary: string;
   createdAt: string;
 }
 
 interface Message {
-  id: string; // Valid RFC4122 UUID String
-  role: "user" | "assistant"; // Matches backend literal strings exactly
-  content: string;
+  id: string; // RFC4122 UUID String
+  role: "user" | "assistant";
+  content: string; // Holds raw markdown or the structured pipeline JSON string
   timestamp: string;
 }
 
-// FIX 1: Generate a true, cryptographically secure RFC4122 v4 UUID string
-// This prevents SQLAlchemy/PostgreSQL from throwing 500 Data Type validation errors.
 function generateUUID(): string {
-  if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
-    return window.crypto.randomUUID();
-  }
-  // Safe programmatic fallback matching strict xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx layout
-  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
-    (+c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16)
-  );
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
-const MOCK_ANSWERS: Record<string, string> = {
-  glassmorphism: `Here is a premium **Glassmorphism CSS template**: \n\n\`\`\`css\n.glass-panel {\n  background: rgba(255, 255, 255, 0.05);\n  backdrop-filter: blur(12px) saturate(180%);\n}\n\`\`\``,
-  reacthook: `Here is a safe **useLocalStorage Hook template**:\n\n\`\`\`typescript\nexport function useLocalStorage<T>(key: string, initialValue: T) {\n  const [value, setValue] = useState<T>(initialValue);\n  return [value, setValue] as const;\n}\n\`\`\``,
-  hydration: `**Hydration mismatch** is fixed in React by waiting until client mounting:\n\n\`\`\`tsx\nconst [mounted, setMounted] = useState(false);\nuseEffect(() => setMounted(true), []);\nif (!mounted) return null;\n\`\`\``,
-  sql: `Here is a standard **FOR UPDATE exclusive lock trigger**:\n\n\`\`\`sql\nSELECT balance FROM bank_accounts WHERE id = 123 FOR UPDATE;\n\`\`\``,
-};
+function getFormattedDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function getFormattedTime(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 export default function Home() {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sessionMessages, setSessionMessages] = useState<Record<string, Message[]>>({});
-  
   const [isThinking, setIsThinking] = useState(false);
-  const [isSidebarOpen, setSidebarOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
 
-  // Load initial theme and establish initial valid session
+  // Initialize with a blank default session if empty
   useEffect(() => {
-    const isDark =
-      localStorage.theme === "dark" ||
-      (!("theme" in localStorage) && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    
-    setIsDarkMode(isDark);
-    if (isDark) document.documentElement.classList.add("dark");
-    else document.documentElement.classList.remove("dark");
-
-    // Initialize with a clean, structurally sound UUID session
-    const defaultId = generateUUID();
-    const defaultSession: ChatSession = {
-      id: defaultId,
-      title: "Chat Session 1",
-      summary: "",
-      createdAt: new Date().toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-    setChatSessions([defaultSession]);
-    setActiveChatId(defaultId);
-    setSessionMessages({ [defaultId]: [] });
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        handleNewChat();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    if (chatSessions.length === 0) {
+      const initialId = generateUUID();
+      const newSession: ChatSession = {
+        id: initialId,
+        title: "New Agent Session",
+        summary: "A fresh workflow execution matrix instance",
+        createdAt: getFormattedDate(),
+      };
+      setChatSessions([newSession]);
+      setActiveChatId(initialId);
+      setSessionMessages({ [initialId]: [] });
+    }
   }, [chatSessions]);
 
-  const toggleTheme = () => {
-    const nextDark = !isDarkMode;
-    setIsDarkMode(nextDark);
-    if (nextDark) {
-      document.documentElement.classList.add("dark");
-      localStorage.theme = "dark";
+  // Sync Dark/Light visual application class lists
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (isDarkMode) {
+      root.classList.add("dark");
     } else {
-      document.documentElement.classList.remove("dark");
-      localStorage.theme = "light";
+      root.classList.remove("dark");
     }
-  };
+  }, [isDarkMode]);
 
-  const handleNewChat = () => {
-    const newSessionId = generateUUID();
-    const newSession: ChatSession = {
-      id: newSessionId,
-      title: "New Conversation",
-      summary: "",
-      createdAt: new Date().toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-
-    setChatSessions((prev) => [newSession, ...prev]);
-    setActiveChatId(newSessionId);
-    setSessionMessages((prev) => ({ ...prev, [newSessionId]: [] }));
-  };
+  const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
+    setIsSidebarOpen(false);
+  };
+
+  const handleNewChat = () => {
+    const newId = generateUUID();
+    const newSession: ChatSession = {
+      id: newId,
+      title: "New Agent Session",
+      summary: "A fresh workflow execution matrix instance",
+      createdAt: getFormattedDate(),
+    };
+    setChatSessions((prev) => [newSession, ...prev]);
+    setActiveChatId(newId);
+    setSessionMessages((prev) => ({ ...prev, [newId]: [] }));
   };
 
   const handleDeleteChat = (id: string) => {
-    setChatSessions((prev) => prev.filter((s) => s.id !== id));
-    setSessionMessages((prev) => {
-      const updated = { ...prev };
-      delete updated[id];
-      return updated;
-    });
+    const remaining = chatSessions.filter((s) => s.id !== id);
+    setChatSessions(remaining);
+    
+    const updatedMessages = { ...sessionMessages };
+    delete updatedMessages[id];
+    setSessionMessages(updatedMessages);
 
     if (activeChatId === id) {
-      const remaining = chatSessions.filter((s) => s.id !== id);
-      if (remaining.length > 0) {
-        setActiveChatId(remaining[0].id);
-      } else {
-        setActiveChatId(null);
-      }
+      setActiveChatId(remaining.length > 0 ? remaining[0].id : null);
     }
   };
 
@@ -146,90 +110,87 @@ export default function Home() {
     setSessionMessages({});
   };
 
-  const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
-
-  // CORE STREAM & CONNECTION MANAGER
-  const handleSendMessage = async (userContent: string) => {
-    if (!userContent.trim()) return;
+  const handleSendMessage = async (prompt: string) => {
+    if (!prompt.trim() || isThinking) return;
 
     let currentSessionId = activeChatId;
-    let currentSessions = [...chatSessions];
-
-    // Auto-build structural session state if none exists active
     if (!currentSessionId) {
       currentSessionId = generateUUID();
       const newSession: ChatSession = {
         id: currentSessionId,
-        title: userContent.length > 25 ? userContent.substring(0, 25) + "..." : userContent,
-        summary: "",
-        createdAt: new Date().toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        title: prompt.length > 24 ? prompt.substring(0, 24) + "..." : prompt,
+        summary: "Processing active context flow...",
+        createdAt: getFormattedDate(),
       };
-      currentSessions = [newSession, ...currentSessions];
-      setChatSessions(currentSessions);
+      setChatSessions([newSession]);
       setActiveChatId(currentSessionId);
-      setSessionMessages((prev) => ({ ...prev, [currentSessionId!]: [] }));
+      setSessionMessages({ [currentSessionId]: [] });
     }
-
-    const currentTimestamp = new Date().toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
 
     const userMessage: Message = {
       id: generateUUID(),
       role: "user",
-      content: userContent,
-      timestamp: currentTimestamp,
+      content: prompt,
+      timestamp: getFormattedTime(),
     };
 
-    // Update UI state with user message immediately
+    // Append User message directly to local component track state
     setSessionMessages((prev) => ({
       ...prev,
       [currentSessionId!]: [...(prev[currentSessionId!] || []), userMessage],
     }));
 
-    // Perform title update transitions if currently on defaults
-    const sessionToUpdate = currentSessions.find((s) => s.id === currentSessionId);
-    if (sessionToUpdate && (sessionToUpdate.title === "New Conversation" || sessionToUpdate.title === "Chat Session 1")) {
-      sessionToUpdate.title = userContent.length > 25 ? userContent.substring(0, 25) + "..." : userContent;
-      setChatSessions(currentSessions);
-    }
+    // Dynamic Title Auto-Update for placeholder names
+    setChatSessions((prev) =>
+      prev.map((s) =>
+        s.id === currentSessionId && s.title === "New Agent Session"
+          ? { ...s, title: prompt.length > 22 ? prompt.substring(0, 22) + "..." : prompt }
+          : s
+      )
+    );
 
     setIsThinking(true);
 
     try {
-      // FIX 2: Explicitly matches your Pydantic "UserMessage" structure in main.py:
-      // message: str
-      // sessionId: str (maps directly to your camelCase JSON check)
+      // Connects directly to your Python FastAPI / Flask Agent Orchestrator Route
       const response = await fetch("http://localhost:8000/api/agent", {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json" 
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: userContent,
-          sessionId: currentSessionId, 
+          sessionId: currentSessionId,
+          message: prompt,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP Error Status: ${response.status}`);
+        throw new Error(`Orchestration engine returned code fault status: ${response.status}`);
       }
 
-      const data = await response.json();
+      const result = await response.json();
       
-      // Pull response and update state securely
-      const assistantReply = data.response || "No response received.";
+      // Extract string contents safely regardless of structure
+      let finalizedContent = "";
+      if (result.data && result.data.ui_pipeline) {
+        // Enforce parsing object payload cleanly back to string for standard engine storage array map
+        finalizedContent = JSON.stringify(result.data.ui_pipeline);
+      } else if (typeof result.data === "string") {
+        finalizedContent = result.data;
+      } else {
+        finalizedContent = JSON.stringify(result);
+      }
+
+      // Update Session running summary properties on-the-fly from backend state
+      if (result.current_summary) {
+        setChatSessions((prev) =>
+          prev.map((s) => (s.id === currentSessionId ? { ...s, summary: result.current_summary } : s))
+        );
+      }
+
       const assistantMessage: Message = {
         id: generateUUID(),
         role: "assistant",
-        content: assistantReply,
-        timestamp: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+        content: finalizedContent,
+        timestamp: getFormattedTime(),
       };
 
       setSessionMessages((prev) => ({
@@ -237,38 +198,29 @@ export default function Home() {
         [currentSessionId!]: [...(prev[currentSessionId!] || []), assistantMessage],
       }));
 
-    } catch (err) {
-      console.warn("Backend unavailable or timed out. Dropping back to developer offline fallbacks.", err);
+    } catch (error) {
+      console.error("Backend pipeline runtime communication failure:", error);
       
-      // Safe development fallback calculation
-      const lookupKey = userContent.toLowerCase().replace(/\s+/g, "");
-      let fallbackText = "Connection to your agent backend failed. Check terminal processes.";
-      
-      if (lookupKey.includes("glass")) fallbackText = MOCK_ANSWERS.glassmorphism;
-      else if (lookupKey.includes("hook")) fallbackText = MOCK_ANSWERS.reacthook;
-      else if (lookupKey.includes("hydra")) fallbackText = MOCK_ANSWERS.hydration;
-      else if (lookupKey.includes("sql")) fallbackText = MOCK_ANSWERS.sql;
-
-      const fallbackMessage: Message = {
+      const errorMessage: Message = {
         id: generateUUID(),
         role: "assistant",
-        content: fallbackText,
-        timestamp: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+        content: `Error: Unable to coordinate with pipeline agent engine. Make sure the backend endpoint server is running correctly.`,
+        timestamp: getFormattedTime(),
       };
 
       setSessionMessages((prev) => ({
         ...prev,
-        [currentSessionId!]: [...(prev[currentSessionId!] || []), fallbackMessage],
+        [currentSessionId!]: [...(prev[currentSessionId!] || []), errorMessage],
       }));
-
     } finally {
-      // Guarantee thinking indicator is shut down cleanly on complete cycles
       setIsThinking(false);
     }
   };
 
+  const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground transition-colors duration-200">
       <Sidebar
         chatSessions={chatSessions}
         activeChatId={activeChatId}
@@ -277,7 +229,7 @@ export default function Home() {
         onDeleteChat={handleDeleteChat}
         onClearChats={handleClearChats}
         isSidebarOpen={isSidebarOpen}
-        setSidebarOpen={setSidebarOpen}
+        setSidebarOpen={setIsSidebarOpen}
         isDarkMode={isDarkMode}
         toggleTheme={toggleTheme}
       />
@@ -287,12 +239,13 @@ export default function Home() {
           messages={activeMessages}
           isThinking={isThinking}
           onSendPrompt={handleSendMessage}
-          setSidebarOpen={setSidebarOpen}
+          setSidebarOpen={setIsSidebarOpen}
         />
 
         <ChatInput
           onSendMessage={handleSendMessage}
           disabled={isThinking}
+          placeholder={isThinking ? "Agent is processing workflow logs..." : "Ask the agent anything..."}
         />
       </div>
     </div>
