@@ -60,6 +60,40 @@ export default function Home() {
       setSessionMessages({ [initialId]: [] });
     }
   }, [chatSessions]);
+  useEffect(() => {
+    const savedSessions = localStorage.getItem("nexus_chatSessions");
+    const savedActiveId = localStorage.getItem("nexus_activeChatId");
+    const savedMessages = localStorage.getItem("nexus_sessionMessages");
+
+    // If we have saved data in the browser, hydrate the React state
+    if (savedSessions && savedActiveId && savedMessages) {
+      setChatSessions(JSON.parse(savedSessions));
+      setActiveChatId(savedActiveId);
+      setSessionMessages(JSON.parse(savedMessages));
+    } else {
+      // If no saved data exists (first time visitor), create the default session
+      const initialId = generateUUID();
+      const newSession: ChatSession = {
+        id: initialId,
+        title: "New Agent Session",
+        summary: "A fresh workflow execution matrix instance",
+        createdAt: getFormattedDate(),
+      };
+      setChatSessions([newSession]);
+      setActiveChatId(initialId);
+      setSessionMessages({ [initialId]: [] });
+    }
+  }, []); 
+
+  // 2. SAVE TO LOCAL STORAGE (Runs automatically whenever your chat data changes)
+  useEffect(() => {
+    // Only save if we actually have data (prevents overwriting with empty states on boot)
+    if (chatSessions.length > 0) {
+      localStorage.setItem("nexus_chatSessions", JSON.stringify(chatSessions));
+      localStorage.setItem("nexus_activeChatId", activeChatId || "");
+      localStorage.setItem("nexus_sessionMessages", JSON.stringify(sessionMessages));
+    }
+  }, [chatSessions, activeChatId, sessionMessages]);
 
   // Sync Dark/Light visual application class lists
   useEffect(() => {
