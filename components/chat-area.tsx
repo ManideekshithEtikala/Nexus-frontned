@@ -26,9 +26,10 @@ interface ChatAreaProps {
   isThinking: boolean;
   onSendPrompt: (prompt: string) => void;
   setSidebarOpen: (open: boolean) => void;
+  onResumeAction: (pendingAction: any, isApproved: boolean) => void;
 }
 
-export default function ChatArea({ messages, isThinking, onSendPrompt, setSidebarOpen }: ChatAreaProps) {
+export default function ChatArea({ messages, isThinking,onResumeAction, onSendPrompt, setSidebarOpen }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -297,7 +298,28 @@ export default function ChatArea({ messages, isThinking, onSendPrompt, setSideba
       ) : (
         messages.map((message) => {
           const isUser = message.role === "user";
-          const blocks = isUser ? null : parsePipelineContent(message.content);
+          
+          // =====================================================================
+          // 🛑 PHASE 5: HIBERNATION INTERCEPTOR
+          // We check if this specific message is an approval request BEFORE parsing normal blocks.
+          // =====================================================================
+          let isApprovalRequest = false;
+          let approvalData = null;
+          
+          if (!isUser) {
+            try {
+              const parsed = JSON.parse(message.content);
+              if (parsed && parsed.status === "requires_approval") {
+                isApprovalRequest = true;
+                approvalData = parsed;
+              }
+            } catch (e) {
+              // Not JSON, or standard text fallback. Safe to ignore.
+            }
+          }
+
+          // Only try to parse UI blocks if it's NOT an approval request
+          const blocks = (!isUser && !isApprovalRequest) ? parsePipelineContent(message.content) : null;
 
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"} animate-in fade-in duration-200`}>
@@ -311,7 +333,39 @@ export default function ChatArea({ messages, isThinking, onSendPrompt, setSideba
                   <span>{message.timestamp}</span>
                 </div>
 
-                {blocks ? (
+                {/* 🛑 RENDER APPROVAL CARD IF INTERCEPTED */}
+                {isApprovalRequest && approvalData ? (
+                  <div className="my-2 p-4 border border-orange-500/50 bg-orange-50/10 dark:bg-orange-900/10 rounded-xl shadow-sm">
+                    <div className="flex items-center gap-2 text-orange-600 dark:text-orange-400 font-bold mb-3">
+                      <span>⚠️</span> Action Requires Human Approval
+                    </div>
+                    <p className="text-sm text-zinc-700 dark:text-zinc-300 mb-4">
+                      {approvalData.message}
+                    </p>
+                    
+                    {/* Render the Tool Arguments so the human knows what they are approving */}
+                    <pre className="bg-zinc-900 text-green-400 p-3 rounded-lg text-xs overflow-x-auto mb-4 border border-zinc-800">
+                      {JSON.stringify(approvalData.pending_action.tool_args, null, 2)}
+                    </pre>
+
+                    {/* The Action Buttons */}
+                    <div className="flex gap-3 mt-4">
+                      <button 
+                        onClick={() => onResumeAction(approvalData.pending_action, true)}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors"
+                      >
+                        Approve Action
+                      </button>
+                      <button 
+                        onClick={() => onResumeAction(approvalData.pending_action, false)}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold rounded-lg shadow-sm transition-colors"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ) : blocks ? (
+                  // 🟢 NORMAL UI BLOCK RENDERING
                   <div className="space-y-4">
                     {blocks.map((block, index) => {
                       if (!block || !block.block_type) return null;
@@ -352,7 +406,6 @@ export default function ChatArea({ messages, isThinking, onSendPrompt, setSideba
                                 {table.rows.map((row, rowIdx) => (
                                   <tr key={row.id || rowIdx} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/30 transition-colors duration-150">
                                     {table.columns.map((col) => {
-                                      // FIXED: Safe field value resolver with exact casing checks and column fallbacks
                                       const cellValue = getTableCellValue(row, col.id, col.name);
                                       return (
                                         <td key={col.id} className="p-3 text-sm font-medium text-zinc-800 dark:text-zinc-200 leading-normal">
@@ -367,17 +420,12 @@ export default function ChatArea({ messages, isThinking, onSendPrompt, setSideba
                           </div>
                         );
                       }
-
-                      return null;
                     })}
                   </div>
                 ) : (
-                  <div className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-                    {isUser ? (
-                      <div className="whitespace-pre-wrap">{message.content}</div>
-                    ) : (
-                      renderAdvancedContentBlocks(message.content, "fallback")
-                    )}
+                  // 🟢 FIX: STANDARD TEXT FALLBACK (For User Messages & Raw AI Text)
+                  <div className={`text-sm leading-relaxed whitespace-pre-wrap ${isUser ? "text-white" : "text-zinc-700 dark:text-zinc-300"}`}>
+                    {message.content}
                   </div>
                 )}
               </div>
