@@ -107,7 +107,7 @@ export default function Home() {
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
   // finding the backend url loading 
-  const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000/api/agent";
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000/api/agent";
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
