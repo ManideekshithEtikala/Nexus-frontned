@@ -44,34 +44,19 @@ export default function Home() {
   const [isThinking, setIsThinking] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isHydrated, setIsHydrated] = useState(false); // Prevents hydration mismatches and local storage overwrites
 
-  // Initialize with a blank default session if empty
-  useEffect(() => {
-    if (chatSessions.length === 0) {
-      const initialId = generateUUID();
-      const newSession: ChatSession = {
-        id: initialId,
-        title: "New Agent Session",
-        summary: "A fresh workflow execution matrix instance",
-        createdAt: getFormattedDate(),
-      };
-      setChatSessions([newSession]);
-      setActiveChatId(initialId);
-      setSessionMessages({ [initialId]: [] });
-    }
-  }, [chatSessions]);
+  // 1. HYDRATION LIFE CYCLE (Reads storage cleanly once browser mounts)
   useEffect(() => {
     const savedSessions = localStorage.getItem("nexus_chatSessions");
     const savedActiveId = localStorage.getItem("nexus_activeChatId");
     const savedMessages = localStorage.getItem("nexus_sessionMessages");
 
-    // If we have saved data in the browser, hydrate the React state
     if (savedSessions && savedActiveId && savedMessages) {
       setChatSessions(JSON.parse(savedSessions));
       setActiveChatId(savedActiveId);
       setSessionMessages(JSON.parse(savedMessages));
     } else {
-      // If no saved data exists (first time visitor), create the default session
       const initialId = generateUUID();
       const newSession: ChatSession = {
         id: initialId,
@@ -83,17 +68,17 @@ export default function Home() {
       setActiveChatId(initialId);
       setSessionMessages({ [initialId]: [] });
     }
+    setIsHydrated(true);
   }, []); 
 
-  // 2. SAVE TO LOCAL STORAGE (Runs automatically whenever your chat data changes)
+  // 2. SAVE TO LOCAL STORAGE (Only triggers downstream after safe hydration)
   useEffect(() => {
-    // Only save if we actually have data (prevents overwriting with empty states on boot)
-    if (chatSessions.length > 0) {
+    if (isHydrated && chatSessions.length > 0) {
       localStorage.setItem("nexus_chatSessions", JSON.stringify(chatSessions));
       localStorage.setItem("nexus_activeChatId", activeChatId || "");
       localStorage.setItem("nexus_sessionMessages", JSON.stringify(sessionMessages));
     }
-  }, [chatSessions, activeChatId, sessionMessages]);
+  }, [chatSessions, activeChatId, sessionMessages, isHydrated]);
 
   // Sync Dark/Light visual application class lists
   useEffect(() => {
@@ -106,10 +91,16 @@ export default function Home() {
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
-  // Backend URL configuration for production and development
-  const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000/api/agent";
-  const BACKEND_URL = `${BASE_URL}/api/agent`;
-  const BACKEND_RESUME_URL = `${BASE_URL}/api/agent/resume`;
+
+  // 🎯 AUTOMATIC URL SANITIZER:
+  // This reads the env string, strips out any trailing slashes, and cuts off "/api/agent" 
+  // if it was accidentally appended in the environment config or build cache.
+  const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
+
+  // These will now ALWAYS evaluate flawlessly to the exact single-path targets
+  const BACKEND_URL = `${cleanBaseUrl}/api/agent`;
+  const BACKEND_RESUME_URL = `${cleanBaseUrl}/api/agent/resume`;
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
@@ -172,13 +163,11 @@ export default function Home() {
       timestamp: getFormattedTime(),
     };
 
-    // Append User message directly to local component track state
     setSessionMessages((prev) => ({
       ...prev,
       [currentSessionId!]: [...(prev[currentSessionId!] || []), userMessage],
     }));
 
-    // Dynamic Title Auto-Update for placeholder names
     setChatSessions((prev) =>
       prev.map((s) =>
         s.id === currentSessionId && s.title === "New Agent Session"
@@ -190,7 +179,6 @@ export default function Home() {
     setIsThinking(true);
 
     try {
-      // Connects directly to your Python FastAPI / Flask Agent Orchestrator Route
       const response = await fetch(BACKEND_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -206,10 +194,8 @@ export default function Home() {
 
       const result = await response.json();
       
-      // Extract string contents safely regardless of structure
       let finalizedContent = "";
       if (result.data && result.data.ui_pipeline) {
-        // Enforce parsing object payload cleanly back to string for standard engine storage array map
         finalizedContent = JSON.stringify(result.data.ui_pipeline);
       } else if (typeof result.data === "string") {
         finalizedContent = result.data;
@@ -217,7 +203,6 @@ export default function Home() {
         finalizedContent = JSON.stringify(result);
       }
 
-      // Update Session running summary properties on-the-fly from backend state
       if (result.current_summary) {
         setChatSessions((prev) =>
           prev.map((s) => (s.id === currentSessionId ? { ...s, summary: result.current_summary } : s))
@@ -254,14 +239,11 @@ export default function Home() {
       setIsThinking(false);
     }
   };
-  // =====================================================================
-  // 🛑 PHASE 5: THE HIBERNATION RESUME HANDLER
-  // =====================================================================
+
   const handleResumeAction = async (pendingAction: any, isApproved: boolean) => {
     if (!activeChatId || isThinking) return;
     setIsThinking(true);
 
-    // 1. Instantly add a user message to the UI showing what they clicked
     const userFeedbackMessage: Message = {
       id: generateUUID(),
       role: "user",
@@ -275,7 +257,6 @@ export default function Home() {
     }));
 
     try {
-      // 2. Send the human's decision to the new backend route
       const response = await fetch(BACKEND_RESUME_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -292,7 +273,6 @@ export default function Home() {
       
       const result = await response.json();
 
-      // 3. Parse the resumed ReAct loop output and append it
       let finalizedContent = "";
       if (result.data && result.data.ui_pipeline) {
         finalizedContent = JSON.stringify(result.data.ui_pipeline);
@@ -318,6 +298,7 @@ export default function Home() {
       setIsThinking(false);
     }
   };
+
   const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
 
   return (
