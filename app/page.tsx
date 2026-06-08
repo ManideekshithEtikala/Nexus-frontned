@@ -106,6 +106,8 @@ export default function Home() {
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
+  // finding the backend url loading 
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000/api/agent";
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
@@ -187,7 +189,7 @@ export default function Home() {
 
     try {
       // Connects directly to your Python FastAPI / Flask Agent Orchestrator Route
-      const response = await fetch("http://localhost:8000/api/agent", {
+      const response = await fetch(BACKEND_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -250,7 +252,70 @@ export default function Home() {
       setIsThinking(false);
     }
   };
+  // =====================================================================
+  // 🛑 PHASE 5: THE HIBERNATION RESUME HANDLER
+  // =====================================================================
+  const handleResumeAction = async (pendingAction: any, isApproved: boolean) => {
+    if (!activeChatId || isThinking) return;
+    setIsThinking(true);
 
+    // 1. Instantly add a user message to the UI showing what they clicked
+    const userFeedbackMessage: Message = {
+      id: generateUUID(),
+      role: "user",
+      content: isApproved ? "✅ Action Approved by User." : "❌ Action Rejected by User.",
+      timestamp: getFormattedTime(),
+    };
+
+    setSessionMessages((prev) => ({
+      ...prev,
+      [activeChatId]: [...(prev[activeChatId] || []), userFeedbackMessage],
+    }));
+
+    try {
+      // 2. Send the human's decision to the new backend route
+      const response = await fetch(`${BACKEND_URL}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: activeChatId,
+          tool_name: pendingAction.tool_name,
+          tool_args: pendingAction.tool_args,
+          tool_call_id: pendingAction.tool_call_id,
+          is_approved: isApproved,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Resume endpoint failed.");
+      
+      const result = await response.json();
+
+      // 3. Parse the resumed ReAct loop output and append it
+      let finalizedContent = "";
+      if (result.data && result.data.ui_pipeline) {
+        finalizedContent = JSON.stringify(result.data.ui_pipeline);
+      } else {
+        finalizedContent = JSON.stringify(result);
+      }
+
+      const assistantMessage: Message = {
+        id: generateUUID(),
+        role: "assistant",
+        content: finalizedContent,
+        timestamp: getFormattedTime(),
+      };
+
+      setSessionMessages((prev) => ({
+        ...prev,
+        [activeChatId]: [...(prev[activeChatId] || []), assistantMessage],
+      }));
+
+    } catch (error) {
+      console.error("Failed to resume:", error);
+    } finally {
+      setIsThinking(false);
+    }
+  };
   const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
 
   return (
@@ -274,6 +339,7 @@ export default function Home() {
           isThinking={isThinking}
           onSendPrompt={handleSendMessage}
           setSidebarOpen={setIsSidebarOpen}
+          onResumeAction={handleResumeAction}
         />
 
         <ChatInput
