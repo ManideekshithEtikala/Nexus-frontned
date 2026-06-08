@@ -106,6 +106,8 @@ export default function Home() {
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
+  // finding the backend url loading 
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000/api/agent";
 
   const handleSelectChat = (id: string) => {
     setActiveChatId(id);
@@ -187,7 +189,7 @@ export default function Home() {
 
     try {
       // Connects directly to your Python FastAPI / Flask Agent Orchestrator Route
-      const response = await fetch("http://localhost:8000/api/agent", {
+      const response = await fetch(BACKEND_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -272,7 +274,7 @@ export default function Home() {
 
     try {
       // 2. Send the human's decision to the new backend route
-      const response = await fetch("http://localhost:8000/api/agent/resume", {
+      const response = await fetch(`${BACKEND_URL}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
