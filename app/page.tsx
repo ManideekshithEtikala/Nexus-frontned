@@ -191,7 +191,7 @@ export default function Home() {
 
     try {
       // Connects directly to your Python FastAPI / Flask Agent Orchestrator Route
-      const response = await fetch(`${BACKEND_URL}/api/agent`, {
+      const response = await fetch(BACKEND_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
