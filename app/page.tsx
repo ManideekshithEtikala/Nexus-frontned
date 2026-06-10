@@ -95,7 +95,7 @@ export default function Home() {
   // 🎯 AUTOMATIC URL SANITIZER:
   // This reads the env string, strips out any trailing slashes, and cuts off "/api/agent" 
   // if it was accidentally appended in the environment config or build cache.
-  const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL ;
   const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
 
   // These will now ALWAYS evaluate flawlessly to the exact single-path targets
