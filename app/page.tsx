@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Sidebar from "../components/sidebar";
 import ChatArea from "../components/chat-area";
 import ChatInput from "../components/chat-input";
@@ -17,6 +17,12 @@ interface Message {
   role: "user" | "assistant";
   content: string; // Holds raw markdown or the structured pipeline JSON string
   timestamp: string;
+}
+
+interface PendingAction {
+  tool_name: string;
+  tool_args: Record<string, unknown>;
+  tool_call_id: string;
 }
 
 function generateUUID(): string {
@@ -48,27 +54,38 @@ export default function Home() {
 
   // 1. HYDRATION LIFE CYCLE (Reads storage cleanly once browser mounts)
   useEffect(() => {
-    const savedSessions = localStorage.getItem("nexus_chatSessions");
-    const savedActiveId = localStorage.getItem("nexus_activeChatId");
-    const savedMessages = localStorage.getItem("nexus_sessionMessages");
+    let active = true;
+    const loadData = async () => {
+      // Asynchronously fetch/set state to prevent synchronous cascading render warnings
+      await Promise.resolve();
+      if (!active) return;
 
-    if (savedSessions && savedActiveId && savedMessages) {
-      setChatSessions(JSON.parse(savedSessions));
-      setActiveChatId(savedActiveId);
-      setSessionMessages(JSON.parse(savedMessages));
-    } else {
-      const initialId = generateUUID();
-      const newSession: ChatSession = {
-        id: initialId,
-        title: "New Agent Session",
-        summary: "A fresh workflow execution matrix instance",
-        createdAt: getFormattedDate(),
-      };
-      setChatSessions([newSession]);
-      setActiveChatId(initialId);
-      setSessionMessages({ [initialId]: [] });
-    }
-    setIsHydrated(true);
+      const savedSessions = localStorage.getItem("nexus_chatSessions");
+      const savedActiveId = localStorage.getItem("nexus_activeChatId");
+      const savedMessages = localStorage.getItem("nexus_sessionMessages");
+
+      if (savedSessions && savedActiveId && savedMessages) {
+        setChatSessions(JSON.parse(savedSessions));
+        setActiveChatId(savedActiveId);
+        setSessionMessages(JSON.parse(savedMessages));
+      } else {
+        const initialId = generateUUID();
+        const newSession: ChatSession = {
+          id: initialId,
+          title: "New Agent Session",
+          summary: "A fresh workflow execution matrix instance",
+          createdAt: getFormattedDate(),
+        };
+        setChatSessions([newSession]);
+        setActiveChatId(initialId);
+        setSessionMessages({ [initialId]: [] });
+      }
+      setIsHydrated(true);
+    };
+    loadData();
+    return () => {
+      active = false;
+    };
   }, []); 
 
   // 2. SAVE TO LOCAL STORAGE (Only triggers downstream after safe hydration)
@@ -95,19 +112,22 @@ export default function Home() {
   // 🎯 AUTOMATIC URL SANITIZER:
   // This reads the env string, strips out any trailing slashes, and cuts off "/api/agent" 
   // if it was accidentally appended in the environment config or build cache.
-  const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL ;
-  const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
+  // Falls back to empty string so it uses the Next.js rewrite proxy (next.config.js)
+  const { BACKEND_URL, BACKEND_RESUME_URL } = useMemo(() => {
+    const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+    const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
+    return {
+      BACKEND_URL: cleanBaseUrl ? `${cleanBaseUrl}/api/agent` : "/api/agent",
+      BACKEND_RESUME_URL: cleanBaseUrl ? `${cleanBaseUrl}/api/agent/resume` : "/api/agent/resume",
+    };
+  }, []);
 
-  // These will now ALWAYS evaluate flawlessly to the exact single-path targets
-  const BACKEND_URL = `${cleanBaseUrl}/api/agent`;
-  const BACKEND_RESUME_URL = `${cleanBaseUrl}/api/agent/resume`;
-
-  const handleSelectChat = (id: string) => {
+  const handleSelectChat = useCallback((id: string) => {
     setActiveChatId(id);
     setIsSidebarOpen(false);
-  };
+  }, []);
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     const newId = generateUUID();
     const newSession: ChatSession = {
       id: newId,
@@ -118,28 +138,30 @@ export default function Home() {
     setChatSessions((prev) => [newSession, ...prev]);
     setActiveChatId(newId);
     setSessionMessages((prev) => ({ ...prev, [newId]: [] }));
-  };
+  }, []);
 
-  const handleDeleteChat = (id: string) => {
-    const remaining = chatSessions.filter((s) => s.id !== id);
-    setChatSessions(remaining);
-    
-    const updatedMessages = { ...sessionMessages };
-    delete updatedMessages[id];
-    setSessionMessages(updatedMessages);
+  const handleDeleteChat = useCallback((id: string) => {
+    setChatSessions((prev) => {
+      const remaining = prev.filter((s) => s.id !== id);
+      if (activeChatId === id) {
+        setActiveChatId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      return remaining;
+    });
+    setSessionMessages((prev) => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
+  }, [activeChatId]);
 
-    if (activeChatId === id) {
-      setActiveChatId(remaining.length > 0 ? remaining[0].id : null);
-    }
-  };
-
-  const handleClearChats = () => {
+  const handleClearChats = useCallback(() => {
     setChatSessions([]);
     setActiveChatId(null);
     setSessionMessages({});
-  };
+  }, []);
 
-  const handleSendMessage = async (prompt: string) => {
+  const handleSendMessage = useCallback(async (prompt: string) => {
     if (!prompt.trim() || isThinking) return;
 
     let currentSessionId = activeChatId;
@@ -238,9 +260,9 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  };
+  }, [activeChatId, isThinking, BACKEND_URL]);
 
-  const handleResumeAction = async (pendingAction: any, isApproved: boolean) => {
+  const handleResumeAction = useCallback(async (pendingAction: PendingAction, isApproved: boolean) => {
     if (!activeChatId || isThinking) return;
     setIsThinking(true);
 
@@ -297,9 +319,11 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  };
+  }, [activeChatId, isThinking, BACKEND_RESUME_URL]);
 
   const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
+  const activeSession = chatSessions.find((s) => s.id === activeChatId);
+  const activeSessionTitle = activeSession ? activeSession.title : "Workspace Matrix Core";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground transition-colors duration-200">
@@ -320,7 +344,7 @@ export default function Home() {
         <ChatArea
           messages={activeMessages}
           isThinking={isThinking}
-          onSendPrompt={handleSendMessage}
+          activeSessionTitle={activeSessionTitle}
           setSidebarOpen={setIsSidebarOpen}
           onResumeAction={handleResumeAction}
         />
