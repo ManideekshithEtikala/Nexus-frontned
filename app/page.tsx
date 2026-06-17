@@ -4,18 +4,20 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Sidebar from "../components/sidebar";
 import ChatArea from "../components/chat-area";
 import ChatInput from "../components/chat-input";
+import { apiFetch } from "../lib/api";
+import { useAuth } from "../hooks/useAuth";
 
 interface ChatSession {
-  id: string; // RFC4122 UUID String
+  id: string;
   title: string;
   summary: string;
   createdAt: string;
 }
 
 interface Message {
-  id: string; // RFC4122 UUID String
+  id: string;
   role: "user" | "assistant";
-  content: string; // Holds raw markdown or the structured pipeline JSON string
+  content: string;
   timestamp: string;
 }
 
@@ -44,25 +46,30 @@ function getFormattedTime(): string {
 }
 
 export default function Home() {
+  const { user, signOut } = useAuth();
+
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sessionMessages, setSessionMessages] = useState<Record<string, Message[]>>({});
   const [isThinking, setIsThinking] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [isHydrated, setIsHydrated] = useState(false); // Prevents hydration mismatches and local storage overwrites
+  const [isHydrated, setIsHydrated] = useState(false);
 
-  // 1. HYDRATION LIFE CYCLE (Reads storage cleanly once browser mounts)
+  // 1. HYDRATION — keyed per user so each user gets their own localStorage
   useEffect(() => {
+    if (!user) return;
     let active = true;
+
     const loadData = async () => {
-      // Asynchronously fetch/set state to prevent synchronous cascading render warnings
       await Promise.resolve();
       if (!active) return;
 
-      const savedSessions = localStorage.getItem("nexus_chatSessions");
-      const savedActiveId = localStorage.getItem("nexus_activeChatId");
-      const savedMessages = localStorage.getItem("nexus_sessionMessages");
+      // Use user.id as key so sessions don't bleed between users
+      const storageKey = `nexus_${user.id}`;
+      const savedSessions = localStorage.getItem(`${storageKey}_chatSessions`);
+      const savedActiveId = localStorage.getItem(`${storageKey}_activeChatId`);
+      const savedMessages = localStorage.getItem(`${storageKey}_sessionMessages`);
 
       if (savedSessions && savedActiveId && savedMessages) {
         setChatSessions(JSON.parse(savedSessions));
@@ -82,45 +89,27 @@ export default function Home() {
       }
       setIsHydrated(true);
     };
+
     loadData();
-    return () => {
-      active = false;
-    };
-  }, []); 
+    return () => { active = false; };
+  }, [user]);
 
-  // 2. SAVE TO LOCAL STORAGE (Only triggers downstream after safe hydration)
+  // 2. SAVE TO LOCAL STORAGE — also keyed per user
   useEffect(() => {
-    if (isHydrated && chatSessions.length > 0) {
-      localStorage.setItem("nexus_chatSessions", JSON.stringify(chatSessions));
-      localStorage.setItem("nexus_activeChatId", activeChatId || "");
-      localStorage.setItem("nexus_sessionMessages", JSON.stringify(sessionMessages));
-    }
-  }, [chatSessions, activeChatId, sessionMessages, isHydrated]);
+    if (!isHydrated || !user || chatSessions.length === 0) return;
+    const storageKey = `nexus_${user.id}`;
+    localStorage.setItem(`${storageKey}_chatSessions`, JSON.stringify(chatSessions));
+    localStorage.setItem(`${storageKey}_activeChatId`, activeChatId || "");
+    localStorage.setItem(`${storageKey}_sessionMessages`, JSON.stringify(sessionMessages));
+  }, [chatSessions, activeChatId, sessionMessages, isHydrated, user]);
 
-  // Sync Dark/Light visual application class lists
+  // Dark mode
   useEffect(() => {
     const root = window.document.documentElement;
-    if (isDarkMode) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
+    isDarkMode ? root.classList.add("dark") : root.classList.remove("dark");
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
-
-  // 🎯 AUTOMATIC URL SANITIZER:
-  // This reads the env string, strips out any trailing slashes, and cuts off "/api/agent" 
-  // if it was accidentally appended in the environment config or build cache.
-  // Falls back to empty string so it uses the Next.js rewrite proxy (next.config.js)
-  const { BACKEND_URL, BACKEND_RESUME_URL } = useMemo(() => {
-    const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-    const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
-    return {
-      BACKEND_URL: cleanBaseUrl ? `${cleanBaseUrl}/api/agent` : "/api/agent",
-      BACKEND_RESUME_URL: cleanBaseUrl ? `${cleanBaseUrl}/api/agent/resume` : "/api/agent/resume",
-    };
-  }, []);
 
   const handleSelectChat = useCallback((id: string) => {
     setActiveChatId(id);
@@ -161,6 +150,7 @@ export default function Home() {
     setSessionMessages({});
   }, []);
 
+  // ✅ MAIN CHANGE: replaced raw fetch() with apiFetch() which auto-attaches the token
   const handleSendMessage = useCallback(async (prompt: string) => {
     if (!prompt.trim() || isThinking) return;
 
@@ -201,21 +191,15 @@ export default function Home() {
     setIsThinking(true);
 
     try {
-      const response = await fetch(BACKEND_URL, {
+      // apiFetch automatically attaches Authorization: Bearer <token>
+      const result = await apiFetch("/api/agent", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: currentSessionId,
           message: prompt,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Orchestration engine returned code fault status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      
       let finalizedContent = "";
       if (result.data && result.data.ui_pipeline) {
         finalizedContent = JSON.stringify(result.data.ui_pipeline);
@@ -245,7 +229,7 @@ export default function Home() {
 
     } catch (error) {
       console.error("Backend pipeline runtime communication failure:", error);
-      
+
       const errorMessage: Message = {
         id: generateUUID(),
         role: "assistant",
@@ -260,8 +244,9 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  }, [activeChatId, isThinking, BACKEND_URL]);
+  }, [activeChatId, isThinking]);
 
+  // ✅ MAIN CHANGE: replaced raw fetch() with apiFetch() which auto-attaches the token
   const handleResumeAction = useCallback(async (pendingAction: PendingAction, isApproved: boolean) => {
     if (!activeChatId || isThinking) return;
     setIsThinking(true);
@@ -279,9 +264,8 @@ export default function Home() {
     }));
 
     try {
-      const response = await fetch(BACKEND_RESUME_URL, {
+      const result = await apiFetch("/api/agent/resume", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: activeChatId,
           tool_name: pendingAction.tool_name,
@@ -290,10 +274,6 @@ export default function Home() {
           is_approved: isApproved,
         }),
       });
-
-      if (!response.ok) throw new Error("Resume endpoint failed.");
-      
-      const result = await response.json();
 
       let finalizedContent = "";
       if (result.data && result.data.ui_pipeline) {
@@ -319,7 +299,7 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  }, [activeChatId, isThinking, BACKEND_RESUME_URL]);
+  }, [activeChatId, isThinking]);
 
   const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
   const activeSession = chatSessions.find((s) => s.id === activeChatId);
@@ -338,6 +318,7 @@ export default function Home() {
         setSidebarOpen={setIsSidebarOpen}
         isDarkMode={isDarkMode}
         toggleTheme={toggleTheme}
+        onSignOut={signOut}        // pass signOut so sidebar can show a sign-out button
       />
 
       <div className="flex-1 flex flex-col min-w-0 relative">
