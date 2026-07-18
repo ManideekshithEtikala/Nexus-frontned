@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useCallback, memo } from "react";
 
 interface Message {
   id: string;
@@ -9,9 +9,15 @@ interface Message {
   timestamp: string;
 }
 
+interface PendingAction {
+  tool_name: string;
+  tool_args: Record<string, unknown>;
+  tool_call_id: string;
+}
+
 interface UIBlockTableData {
   columns: Array<{ id: string; name: string }>;
-  rows: Array<Record<string, any>>; 
+  rows: Array<Record<string, unknown>>; 
 }
 
 interface UIBlock {
@@ -24,20 +30,37 @@ interface UIBlock {
 interface ChatAreaProps {
   messages: Message[];
   isThinking: boolean;
-  onSendPrompt: (prompt: string) => void;
+  activeSessionTitle: string;
   setSidebarOpen: (open: boolean) => void;
-  onResumeAction: (pendingAction: any, isApproved: boolean) => void;
+  onResumeAction: (pendingAction: PendingAction, isApproved: boolean) => void;
 }
 
-export default function ChatArea({ messages, isThinking,onResumeAction, onSendPrompt, setSidebarOpen }: ChatAreaProps) {
+function ChatArea({ messages, isThinking, onResumeAction, activeSessionTitle, setSidebarOpen }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lastMsgCountRef = useRef(0);
 
+  // Only auto-scroll when a NEW message is added (not on every isThinking toggle)
+  // Uses requestAnimationFrame to avoid blocking the main thread and causing freeze
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isThinking]);
+    if (messages.length !== lastMsgCountRef.current) {
+      lastMsgCountRef.current = messages.length;
+      requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      });
+    }
+  }, [messages.length]);
+
+  // Scroll to bottom when thinking indicator appears (new response incoming)
+  useEffect(() => {
+    if (isThinking) {
+      requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      });
+    }
+  }, [isThinking]);
 
   // Safe Polymorphic JSON Pipeline Parser
-  const parsePipelineContent = (content: string): UIBlock[] | null => {
+  const parsePipelineContent = useCallback((content: string): UIBlock[] | null => {
     const trimmed = content.trim();
     if (!trimmed) return null;
 
@@ -58,13 +81,13 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
       }
       
       return null;
-    } catch (e) {
+    } catch {
       return null; 
     }
-  };
+  }, []);
 
   // Safe Link Formatter & Extractor
-  const renderTextSegmentWithLinks = (textSegment: string, key: string) => {
+  const renderTextSegmentWithLinks = useCallback((textSegment: string, key: string) => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     const parts = textSegment.split(urlRegex);
 
@@ -87,12 +110,12 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
           </a>
         );
       }
-      return part;
+      return <span key={`${key}-text-${index}`}>{part}</span>;
     });
-  };
+  }, []);
 
   // Safe Inline Markdown Segment Parser (Bold & Inline Code Backticks)
-  const renderInlineMarkdown = (text: string, baseKey: string) => {
+  const renderInlineMarkdown = useCallback((text: string, baseKey: string) => {
     if (!text) return "";
     const segments = text.split(/(\*\*|`)/g);
     let inBold = false;
@@ -115,10 +138,10 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
       }
       return <span key={segKey}>{renderTextSegmentWithLinks(seg, segKey)}</span>;
     });
-  };
+  }, [renderTextSegmentWithLinks]);
 
   // ADVANCED: Stateful Block Parser capturing code snippets, section layouts, and lists safely
-  const renderAdvancedContentBlocks = (text: string, msgKey: string = "block") => {
+  const renderAdvancedContentBlocks = useCallback((text: string, msgKey: string = "block") => {
     if (!text) return null;
 
     const lines = text.split("\n");
@@ -261,10 +284,10 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
     }
 
     return components;
-  };
+  }, [renderInlineMarkdown]);
 
   // Helper Utility: Resolves the key name for table mapping case-sensitively
-  const getTableCellValue = (row: Record<string, any>, colId: string, colName: string): string => {
+  const getTableCellValue = useCallback((row: Record<string, unknown>, colId: string, colName: string): string => {
     // Exact Key Match (e.g., row["language"])
     if (row[colId] !== undefined) return String(row[colId]);
     
@@ -284,11 +307,37 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
     if (row.value !== undefined) return String(row.value);
     
     return "";
-  };
+  }, []);
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 bg-white dark:bg-[#0c0c0e]">
-      {messages.length === 0 ? (
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-[#0c0c0e]">
+      {/* Sticky top header bar */}
+      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-200/60 dark:border-zinc-800/60 bg-white/80 dark:bg-[#0c0c0e]/80 backdrop-blur-md sticky top-0 z-20">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 lg:hidden transition"
+            title="Open sidebar"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <h1 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate max-w-[200px] md:max-w-md">
+            {activeSessionTitle}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-[10px] font-mono font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider hidden sm:inline">
+            Active Core Pipeline
+          </span>
+        </div>
+      </header>
+
+      {/* Main message feed container */}
+      <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+        {messages.length === 0 ? (
         <div className="h-full flex flex-col items-center justify-center text-center p-6 select-none">
           <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-200 mb-2">Workspace Matrix Core</h2>
           <p className="text-sm text-zinc-400 max-w-sm">
@@ -313,7 +362,7 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
                 isApprovalRequest = true;
                 approvalData = parsed;
               }
-            } catch (e) {
+            } catch {
               // Not JSON, or standard text fallback. Safe to ignore.
             }
           }
@@ -423,10 +472,16 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
                     })}
                   </div>
                 ) : (
-                  // 🟢 FIX: STANDARD TEXT FALLBACK (For User Messages & Raw AI Text)
-                  <div className={`text-sm leading-relaxed whitespace-pre-wrap ${isUser ? "text-white" : "text-zinc-700 dark:text-zinc-300"}`}>
-                    {message.content}
-                  </div>
+                  // 🟢 STANDARD TEXT FALLBACK (User messages shown as-is; assistant text goes through markdown renderer)
+                  isUser ? (
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-white">
+                      {message.content}
+                    </div>
+                  ) : (
+                    <div className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+                      {renderAdvancedContentBlocks(message.content, `msg-${message.id}`)}
+                    </div>
+                  )
                 )}
               </div>
             </div>
@@ -445,6 +500,9 @@ export default function ChatArea({ messages, isThinking,onResumeAction, onSendPr
         </div>
       )}
       <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
+
+export default memo(ChatArea);

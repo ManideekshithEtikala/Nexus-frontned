@@ -17,7 +17,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light) {
     --background: #09090b;
     --foreground: #f4f4f5;
     
@@ -32,6 +32,23 @@
     --user-msg-bg: #27272a;
     --bot-msg-bg: #18181b;
   }
+}
+
+/* Dark mode via .dark class (JS toggle) */
+.dark {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  
+  --card-bg: rgba(18, 18, 22, 0.7);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --sidebar-bg: rgba(9, 9, 11, 0.96);
+  
+  --accent-indigo: #6366f1;
+  --accent-emerald: #34d399;
+  --accent-glow: rgba(99, 102, 241, 0.25);
+  
+  --user-msg-bg: #27272a;
+  --bot-msg-bg: #18181b;
 }
 
 @theme inline {

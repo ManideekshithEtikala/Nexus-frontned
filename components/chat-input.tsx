@@ -17,6 +17,10 @@ export default function ChatInput({ onSendMessage, disabled, placeholder }: Chat
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    // When cleared after submit, restore focus
+    if (inputValue === "") {
+      textarea.focus();
+    }
   }, [inputValue]);
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -26,13 +30,7 @@ export default function ChatInput({ onSendMessage, disabled, placeholder }: Chat
 
     onSendMessage(trimmedValue);
     setInputValue("");
-
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        textareaRef.current.style.height = "auto";
-      }
-    }, 50);
+    // Focus is restored by the useEffect below when inputValue becomes ""
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

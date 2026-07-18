@@ -1,22 +1,30 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Sidebar from "../components/sidebar";
 import ChatArea from "../components/chat-area";
 import ChatInput from "../components/chat-input";
+import { apiFetch } from "../lib/api";
+import { useAuth } from "../hooks/useAuth";
 
 interface ChatSession {
-  id: string; // RFC4122 UUID String
+  id: string;
   title: string;
   summary: string;
   createdAt: string;
 }
 
 interface Message {
-  id: string; // RFC4122 UUID String
+  id: string;
   role: "user" | "assistant";
-  content: string; // Holds raw markdown or the structured pipeline JSON string
+  content: string;
   timestamp: string;
+}
+
+interface PendingAction {
+  tool_name: string;
+  tool_args: Record<string, unknown>;
+  tool_call_id: string;
 }
 
 function generateUUID(): string {
@@ -38,76 +46,77 @@ function getFormattedTime(): string {
 }
 
 export default function Home() {
+  const { user, signOut } = useAuth();
+
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [sessionMessages, setSessionMessages] = useState<Record<string, Message[]>>({});
   const [isThinking, setIsThinking] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [isHydrated, setIsHydrated] = useState(false); // Prevents hydration mismatches and local storage overwrites
+  const [isHydrated, setIsHydrated] = useState(false);
 
-  // 1. HYDRATION LIFE CYCLE (Reads storage cleanly once browser mounts)
+  // 1. HYDRATION — keyed per user so each user gets their own localStorage
   useEffect(() => {
-    const savedSessions = localStorage.getItem("nexus_chatSessions");
-    const savedActiveId = localStorage.getItem("nexus_activeChatId");
-    const savedMessages = localStorage.getItem("nexus_sessionMessages");
+    if (!user) return;
+    let active = true;
 
-    if (savedSessions && savedActiveId && savedMessages) {
-      setChatSessions(JSON.parse(savedSessions));
-      setActiveChatId(savedActiveId);
-      setSessionMessages(JSON.parse(savedMessages));
-    } else {
-      const initialId = generateUUID();
-      const newSession: ChatSession = {
-        id: initialId,
-        title: "New Agent Session",
-        summary: "A fresh workflow execution matrix instance",
-        createdAt: getFormattedDate(),
-      };
-      setChatSessions([newSession]);
-      setActiveChatId(initialId);
-      setSessionMessages({ [initialId]: [] });
-    }
-    setIsHydrated(true);
-  }, []); 
+    const loadData = async () => {
+      await Promise.resolve();
+      if (!active) return;
 
-  // 2. SAVE TO LOCAL STORAGE (Only triggers downstream after safe hydration)
+      // Use user.id as key so sessions don't bleed between users
+      const storageKey = `nexus_${user.id}`;
+      const savedSessions = localStorage.getItem(`${storageKey}_chatSessions`);
+      const savedActiveId = localStorage.getItem(`${storageKey}_activeChatId`);
+      const savedMessages = localStorage.getItem(`${storageKey}_sessionMessages`);
+
+      if (savedSessions && savedActiveId && savedMessages) {
+        setChatSessions(JSON.parse(savedSessions));
+        setActiveChatId(savedActiveId);
+        setSessionMessages(JSON.parse(savedMessages));
+      } else {
+        const initialId = generateUUID();
+        const newSession: ChatSession = {
+          id: initialId,
+          title: "New Agent Session",
+          summary: "A fresh workflow execution matrix instance",
+          createdAt: getFormattedDate(),
+        };
+        setChatSessions([newSession]);
+        setActiveChatId(initialId);
+        setSessionMessages({ [initialId]: [] });
+      }
+      setIsHydrated(true);
+    };
+
+    loadData();
+    return () => { active = false; };
+  }, [user]);
+
+  // 2. SAVE TO LOCAL STORAGE — also keyed per user
   useEffect(() => {
-    if (isHydrated && chatSessions.length > 0) {
-      localStorage.setItem("nexus_chatSessions", JSON.stringify(chatSessions));
-      localStorage.setItem("nexus_activeChatId", activeChatId || "");
-      localStorage.setItem("nexus_sessionMessages", JSON.stringify(sessionMessages));
-    }
-  }, [chatSessions, activeChatId, sessionMessages, isHydrated]);
+    if (!isHydrated || !user || chatSessions.length === 0) return;
+    const storageKey = `nexus_${user.id}`;
+    localStorage.setItem(`${storageKey}_chatSessions`, JSON.stringify(chatSessions));
+    localStorage.setItem(`${storageKey}_activeChatId`, activeChatId || "");
+    localStorage.setItem(`${storageKey}_sessionMessages`, JSON.stringify(sessionMessages));
+  }, [chatSessions, activeChatId, sessionMessages, isHydrated, user]);
 
-  // Sync Dark/Light visual application class lists
+  // Dark mode
   useEffect(() => {
     const root = window.document.documentElement;
-    if (isDarkMode) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
+    isDarkMode ? root.classList.add("dark") : root.classList.remove("dark");
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
-  // 🎯 AUTOMATIC URL SANITIZER:
-  // This reads the env string, strips out any trailing slashes, and cuts off "/api/agent" 
-  // if it was accidentally appended in the environment config or build cache.
-  const rawEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL ;
-  const cleanBaseUrl = rawEnvUrl.replace(/\/api\/agent\/?$/, "").replace(/\/$/, "");
-
-  // These will now ALWAYS evaluate flawlessly to the exact single-path targets
-  const BACKEND_URL = `${cleanBaseUrl}/api/agent`;
-  const BACKEND_RESUME_URL = `${cleanBaseUrl}/api/agent/resume`;
-
-  const handleSelectChat = (id: string) => {
+  const handleSelectChat = useCallback((id: string) => {
     setActiveChatId(id);
     setIsSidebarOpen(false);
-  };
+  }, []);
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     const newId = generateUUID();
     const newSession: ChatSession = {
       id: newId,
@@ -118,28 +127,31 @@ export default function Home() {
     setChatSessions((prev) => [newSession, ...prev]);
     setActiveChatId(newId);
     setSessionMessages((prev) => ({ ...prev, [newId]: [] }));
-  };
+  }, []);
 
-  const handleDeleteChat = (id: string) => {
-    const remaining = chatSessions.filter((s) => s.id !== id);
-    setChatSessions(remaining);
-    
-    const updatedMessages = { ...sessionMessages };
-    delete updatedMessages[id];
-    setSessionMessages(updatedMessages);
+  const handleDeleteChat = useCallback((id: string) => {
+    setChatSessions((prev) => {
+      const remaining = prev.filter((s) => s.id !== id);
+      if (activeChatId === id) {
+        setActiveChatId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      return remaining;
+    });
+    setSessionMessages((prev) => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
+  }, [activeChatId]);
 
-    if (activeChatId === id) {
-      setActiveChatId(remaining.length > 0 ? remaining[0].id : null);
-    }
-  };
-
-  const handleClearChats = () => {
+  const handleClearChats = useCallback(() => {
     setChatSessions([]);
     setActiveChatId(null);
     setSessionMessages({});
-  };
+  }, []);
 
-  const handleSendMessage = async (prompt: string) => {
+  // ✅ MAIN CHANGE: replaced raw fetch() with apiFetch() which auto-attaches the token
+  const handleSendMessage = useCallback(async (prompt: string) => {
     if (!prompt.trim() || isThinking) return;
 
     let currentSessionId = activeChatId;
@@ -179,35 +191,51 @@ export default function Home() {
     setIsThinking(true);
 
     try {
-      const response = await fetch(BACKEND_URL, {
+      // apiFetch automatically attaches Authorization: Bearer <token>
+      const result = await apiFetch("/api/agent", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: currentSessionId,
           message: prompt,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Orchestration engine returned code fault status: ${response.status}`);
-      }
+    let finalizedContent = "";
 
-      const result = await response.json();
+if (result && result.data) {
+  const rawData = result.data;
+
+  if (typeof rawData === "string") {
+    // 🎯 TARGETED EXTRACTOR: Look for the text field content without crashing on single/double quote mismatches
+    // This finds the text between 'text': ' and ', 'extras'
+    const textPattern = /'text':\s*['"]([\s\S]*?)['"],\s*'extras'/;
+    const match = rawData.match(textPattern);
+
+    if (match && match[1]) {
+      // 1. Unescape explicit Python string newlines (\n) so Markdown can render them
+      let cleanText = match[1].replace(/\\n/g, "\n");
       
-      let finalizedContent = "";
-      if (result.data && result.data.ui_pipeline) {
-        finalizedContent = JSON.stringify(result.data.ui_pipeline);
-      } else if (typeof result.data === "string") {
-        finalizedContent = result.data;
-      } else {
-        finalizedContent = JSON.stringify(result);
-      }
-
-      if (result.current_summary) {
-        setChatSessions((prev) =>
-          prev.map((s) => (s.id === currentSessionId ? { ...s, summary: result.current_summary } : s))
-        );
-      }
+      // 2. Fix escaped quotes that python might leave behind (like \' or \")
+      cleanText = cleanText.replace(/\\'/g, "'").replace(/\\"/g, '"');
+      
+      finalizedContent = cleanText;
+    } else {
+      // If the string doesn't look like the agent list container format, treat it as plain text
+      finalizedContent = rawData;
+    }
+  } 
+  // Safety Fallback: If the backend ever returns a proper JavaScript Array or Object structure
+  else if (Array.isArray(rawData)) {
+    const firstBlock = rawData[0];
+    finalizedContent = firstBlock && typeof firstBlock.text === "string" ? firstBlock.text : JSON.stringify(rawData);
+  } else if (typeof rawData === "object" && rawData !== null) {
+    finalizedContent = rawData.text || JSON.stringify(rawData);
+  } else {
+    finalizedContent = String(rawData);
+  }
+} else {
+  finalizedContent = "No response payload received from the engine.";
+}
 
       const assistantMessage: Message = {
         id: generateUUID(),
@@ -223,7 +251,7 @@ export default function Home() {
 
     } catch (error) {
       console.error("Backend pipeline runtime communication failure:", error);
-      
+
       const errorMessage: Message = {
         id: generateUUID(),
         role: "assistant",
@@ -238,9 +266,10 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  };
+  }, [activeChatId, isThinking]);
 
-  const handleResumeAction = async (pendingAction: any, isApproved: boolean) => {
+  // ✅ MAIN CHANGE: replaced raw fetch() with apiFetch() which auto-attaches the token
+  const handleResumeAction = useCallback(async (pendingAction: PendingAction, isApproved: boolean) => {
     if (!activeChatId || isThinking) return;
     setIsThinking(true);
 
@@ -257,9 +286,8 @@ export default function Home() {
     }));
 
     try {
-      const response = await fetch(BACKEND_RESUME_URL, {
+      const result = await apiFetch("/api/agent/resume", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: activeChatId,
           tool_name: pendingAction.tool_name,
@@ -268,10 +296,6 @@ export default function Home() {
           is_approved: isApproved,
         }),
       });
-
-      if (!response.ok) throw new Error("Resume endpoint failed.");
-      
-      const result = await response.json();
 
       let finalizedContent = "";
       if (result.data && result.data.ui_pipeline) {
@@ -297,9 +321,11 @@ export default function Home() {
     } finally {
       setIsThinking(false);
     }
-  };
+  }, [activeChatId, isThinking]);
 
   const activeMessages = activeChatId ? sessionMessages[activeChatId] || [] : [];
+  const activeSession = chatSessions.find((s) => s.id === activeChatId);
+  const activeSessionTitle = activeSession ? activeSession.title : "Workspace Matrix Core";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground transition-colors duration-200">
@@ -314,13 +340,14 @@ export default function Home() {
         setSidebarOpen={setIsSidebarOpen}
         isDarkMode={isDarkMode}
         toggleTheme={toggleTheme}
+        onSignOut={signOut}        // pass signOut so sidebar can show a sign-out button
       />
 
       <div className="flex-1 flex flex-col min-w-0 relative">
         <ChatArea
           messages={activeMessages}
           isThinking={isThinking}
-          onSendPrompt={handleSendMessage}
+          activeSessionTitle={activeSessionTitle}
           setSidebarOpen={setIsSidebarOpen}
           onResumeAction={handleResumeAction}
         />
