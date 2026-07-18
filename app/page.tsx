@@ -200,20 +200,42 @@ export default function Home() {
         }),
       });
 
-      let finalizedContent = "";
-      if (result.data && result.data.ui_pipeline) {
-        finalizedContent = JSON.stringify(result.data.ui_pipeline);
-      } else if (typeof result.data === "string") {
-        finalizedContent = result.data;
-      } else {
-        finalizedContent = JSON.stringify(result);
-      }
+    let finalizedContent = "";
 
-      if (result.current_summary) {
-        setChatSessions((prev) =>
-          prev.map((s) => (s.id === currentSessionId ? { ...s, summary: result.current_summary } : s))
-        );
-      }
+if (result && result.data) {
+  const rawData = result.data;
+
+  if (typeof rawData === "string") {
+    // 🎯 TARGETED EXTRACTOR: Look for the text field content without crashing on single/double quote mismatches
+    // This finds the text between 'text': ' and ', 'extras'
+    const textPattern = /'text':\s*['"]([\s\S]*?)['"],\s*'extras'/;
+    const match = rawData.match(textPattern);
+
+    if (match && match[1]) {
+      // 1. Unescape explicit Python string newlines (\n) so Markdown can render them
+      let cleanText = match[1].replace(/\\n/g, "\n");
+      
+      // 2. Fix escaped quotes that python might leave behind (like \' or \")
+      cleanText = cleanText.replace(/\\'/g, "'").replace(/\\"/g, '"');
+      
+      finalizedContent = cleanText;
+    } else {
+      // If the string doesn't look like the agent list container format, treat it as plain text
+      finalizedContent = rawData;
+    }
+  } 
+  // Safety Fallback: If the backend ever returns a proper JavaScript Array or Object structure
+  else if (Array.isArray(rawData)) {
+    const firstBlock = rawData[0];
+    finalizedContent = firstBlock && typeof firstBlock.text === "string" ? firstBlock.text : JSON.stringify(rawData);
+  } else if (typeof rawData === "object" && rawData !== null) {
+    finalizedContent = rawData.text || JSON.stringify(rawData);
+  } else {
+    finalizedContent = String(rawData);
+  }
+} else {
+  finalizedContent = "No response payload received from the engine.";
+}
 
       const assistantMessage: Message = {
         id: generateUUID(),
